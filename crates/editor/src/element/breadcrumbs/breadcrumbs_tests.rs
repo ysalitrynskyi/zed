@@ -5027,6 +5027,126 @@ async fn test_stepping_left_keeps_rows_until_the_parent_loads(cx: &mut TestAppCo
     });
 }
 
+// The same step-out with a query that matched nothing. There are no rows to keep then, and the
+// switch has to hold anyway: what the user is reading is "No matches", and repainting the
+// directory they are leaving - in full, because stepping out clears the query - is the same
+// flash arriving by another route.
+#[gpui::test]
+async fn test_stepping_left_out_of_a_zero_match_filter_shows_no_stale_listing(
+    cx: &mut TestAppContext,
+) {
+    use crate::editor_tests::init_test;
+    use crate::test::build_editor;
+    use gpui::KeyBinding;
+    use project::{FakeFs, Project};
+    use serde_json::json;
+    use util::path;
+    use workspace::Workspace;
+
+    init_test(cx, |_| {});
+    cx.update(|cx| {
+        cx.bind_keys([KeyBinding::new(
+            "left",
+            SelectParent,
+            Some("BreadcrumbNavigationMenu > Editor"),
+        )]);
+    });
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/root"),
+        json!({ "outer": { "inner": { "file.rs": "fn main() {}" }, "sibling.rs": "" } }),
+    )
+    .await;
+    let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+    let worktree_id = project.update(cx, |project, cx| {
+        project.worktrees(cx).next().unwrap().read(cx).id()
+    });
+    cx.run_until_parked();
+
+    let workspace_window =
+        cx.add_window(|window, cx| Workspace::test_new(project.clone(), window, cx));
+    let workspace = workspace_window.root(cx).unwrap();
+    let buffer = cx.new(|cx| language::Buffer::local("", cx));
+    let multi_buffer = cx.new(|cx| MultiBuffer::singleton(buffer, cx));
+
+    struct MenuHost {
+        menu: Entity<BreadcrumbNavigationMenu>,
+    }
+    impl gpui::Render for MenuHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            self.menu.clone()
+        }
+    }
+
+    let host_window = cx.add_window(|window, cx| {
+        let editor = cx.new(|cx| build_editor(multi_buffer, window, cx));
+        let menu = BreadcrumbNavigationMenu::new(
+            editor.downgrade(),
+            workspace.downgrade(),
+            BreadcrumbListing::Directory {
+                worktree_id,
+                path: RelPath::new_test("outer/inner").into_arc(),
+            },
+            None,
+            false,
+            window,
+            cx,
+        );
+        MenuHost { menu }
+    });
+    let menu = host_window
+        .root(cx)
+        .unwrap()
+        .read_with(cx, |host, _| host.menu.clone());
+    let cx = &mut VisualTestContext::from_window(*host_window, cx);
+    cx.run_until_parked();
+    menu.update_in(cx, |menu, window, cx| {
+        window.focus(&menu.focus_handle(cx), cx);
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+
+    cx.simulate_input("zzz");
+    cx.run_until_parked();
+    menu.read_with(cx, |menu, cx| {
+        assert!(
+            menu.published_row_labels(cx).is_empty(),
+            "the query has to match nothing for this to be the empty-rows case"
+        );
+    });
+    menu.update(cx, |menu, _| {
+        let _ = menu.take_published_row_history();
+    });
+
+    cx.simulate_keystrokes("left");
+    cx.run_until_parked();
+
+    let published = menu.update(cx, |menu, _| menu.take_published_row_history());
+    let stale = published
+        .iter()
+        .position(|rows| rows.iter().any(|label| label.as_ref() == "file.rs"));
+    assert_eq!(
+        stale, None,
+        "the directory being left must not be repainted, filter gone, while the parent loads;          published rows were {published:?}"
+    );
+    menu.read_with(cx, |menu, _| {
+        assert_eq!(
+            menu.entry_names()
+                .iter()
+                .map(|n| n.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["inner", "sibling.rs"],
+            "and the parent still lands"
+        );
+    });
+}
+
 #[gpui::test]
 async fn test_a_new_query_selects_its_best_match(cx: &mut TestAppContext) {
     use crate::editor_tests::init_test;

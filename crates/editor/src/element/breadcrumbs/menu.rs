@@ -814,13 +814,15 @@ impl BreadcrumbNavigationMenu {
         let settings = *BreadcrumbListingSettings::get_global(cx);
         // A switch keeps what the user was reading, exactly as it was, until the new listing's
         // entries arrive: repainting from the entries being left would show that directory
-        // again, and unfiltered, because the switch cleared the query.
+        // again, and unfiltered, because the switch cleared the query. That holds when the
+        // query matched nothing too - the reading is then "No matches", and replacing it with
+        // the outgoing directory in full is the same flash by another route.
         let switching = self.rows_frozen_for_load == Some(self.load_epoch)
             || self
                 .entries_listing
                 .as_ref()
                 .is_some_and(|loaded| loaded != &self.listing);
-        if switching && !self.rows.is_empty() {
+        if switching {
             return;
         }
         let filter_active = !self.filter_is_empty();
@@ -1549,7 +1551,8 @@ impl BreadcrumbNavigationMenu {
         };
         self.listing = BreadcrumbListing::Symbols { buffer_id, parent };
         self.listed_symbol_indices = listed_indices;
-        // Candidates are the whole outline, unchanged by re-windowing to this parent's level.
+        // Candidates are the whole outline, so re-windowing to this parent's level leaves
+        // them alone; `reload_listing` keeps them for the same reason.
         self.rebuild_symbol_trail();
         self.publish_rows(cx);
     }
@@ -1946,7 +1949,6 @@ impl BreadcrumbNavigationMenu {
         self.selected_index = None;
         self.listing = BreadcrumbListing::Symbols { buffer_id, parent };
         self.listed_symbol_indices = listed_indices;
-        // Candidates are the whole outline, unchanged by re-windowing to this parent's level.
         self.rebuild_symbol_trail();
         self.apply_initial_selection_if_needed(cx);
         self.publish_rows(cx);
