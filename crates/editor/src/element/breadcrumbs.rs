@@ -66,9 +66,7 @@ pub fn render_breadcrumb_text(
 ) -> gpui::AnyElement {
     let element = h_flex().flex_grow_1().min_w_0().text_ui(cx);
 
-    let editor = active_item
-        .downcast::<Editor>()
-        .map(|editor| editor.downgrade());
+    let is_editor = active_item.downcast::<Editor>().is_some();
 
     let row = prepare_breadcrumb_strip(
         segments,
@@ -102,20 +100,21 @@ pub fn render_breadcrumb_text(
         breadcrumbs_stack
     };
 
-    match editor {
-        Some(_editor) => element
+    if is_editor {
+        element
             .id("breadcrumb_container")
             .min_w_0()
             .h(rems_from_px(22_f32))
             .px(DynamicSpacing::Base04.rems(cx))
             .when(!multibuffer_header, |this| this.overflow_hidden())
             .child(breadcrumbs)
-            .into_any_element(),
-        None => element
+            .into_any_element()
+    } else {
+        element
             .h(rems_from_px(22_f32))
             .pl_1()
             .child(breadcrumbs)
-            .into_any_element(),
+            .into_any_element()
     }
 }
 
@@ -325,7 +324,7 @@ fn prepare_breadcrumb_strip(
                 );
             // The file segment carries the unsaved-changes style, and never a directory the
             // menu has browsed to. An item with no file segment keeps it on the first one,
-            // which is the name it puts there and where the bar styled it before.
+            // which is the name such an item puts there.
             let dirty_filename_style = apply_dirty_filename_style
                 && if has_file_segment {
                     is_file_segment

@@ -1085,9 +1085,8 @@ pub(super) fn segment_tooltip_shows_navigation_chord(target: &BreadcrumbSegmentT
     matches!(target, BreadcrumbSegmentTarget::Symbol { item: None, .. })
 }
 
-/// Where the tail begins: the sum of every item before it. Each measured width already
-/// carries its trailing gap, so adding the inter-item gap again here overestimated the sum by
-/// a gap per item and folded tails that fit.
+/// Where the tail begins: the sum of every item before it. Each measured width already carries
+/// its trailing gap, so the inter-item gap is not added again.
 fn folded_tail_start(
     origin: Pixels,
     sequence: &[FinalItem],
@@ -1223,7 +1222,7 @@ mod tests {
         assert_eq!(
             folded_tail_start(px(100.), &sequence, &metrics),
             px(160.),
-            "each width already carries its trailing gap; adding the gap again folded tails              that fit"
+            "each width already carries its trailing gap; adding the gap again folded \n         tails that fit"
         );
     }
 }

@@ -4342,7 +4342,7 @@ async fn test_a_drill_keeps_the_filtered_rows_until_the_target_loads(cx: &mut Te
     let published = menu.update(cx, |menu, _| menu.take_published_row_history());
     assert!(
         !published.is_empty() && published.iter().all(|rows| !rows.is_empty()),
-        "a drill must not blank the rows while the target loads; published rows were              {published:?}"
+        "a drill must not blank the rows while the target loads; published rows were \n         {published:?}"
     );
     assert!(
         published
@@ -5133,7 +5133,7 @@ async fn test_stepping_left_out_of_a_zero_match_filter_shows_no_stale_listing(
         .position(|rows| rows.iter().any(|label| label.as_ref() == "file.rs"));
     assert_eq!(
         stale, None,
-        "the directory being left must not be repainted, filter gone, while the parent loads;          published rows were {published:?}"
+        "the directory being left must not be repainted, filter gone, while the parent \n         loads; published rows were {published:?}"
     );
     menu.read_with(cx, |menu, _| {
         assert_eq!(
@@ -5463,9 +5463,10 @@ async fn test_a_reload_under_a_filter_does_not_flash_the_rows(cx: &mut TestAppCo
             .iter()
             .map(|n| n.as_ref().to_string())
             .collect();
-        assert!(
-            rows.contains(&"alps.txt".to_string()),
-            "the reloaded, still-filtered rows include the new match, got {rows:?}"
+        assert_eq!(
+            rows,
+            vec!["alps.txt", "alpha.txt", "alpine.txt"],
+            "the reloaded rows are the filter's matches, ranked, with the new file among them"
         );
     });
 }
@@ -10613,7 +10614,7 @@ async fn test_select_child_on_open_file_row_opens_symbols(cx: &mut TestAppContex
                         assert_eq!(path.as_unix_str(), "");
                     }
                     other => panic!(
-                        "only the open file's row opens symbols; a row for another file opens                          that file, got {other:?}"
+                        "only the open file's row opens symbols; a row for another file opens that \n                         file, got {other:?}"
                     ),
                 }
             })

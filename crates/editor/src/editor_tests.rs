@@ -482,15 +482,17 @@ async fn test_open_breadcrumb_navigation_opens_the_file_outline(cx: &mut TestApp
         window.focus(&editor.focus_handle(cx), cx);
     });
     cx.update(|window, cx| {
-        let _ = window.draw(cx);
+        window.draw(cx).clear(cx);
     });
     cx.run_until_parked();
 
-    // Asserted inside the same update as the action: the menu is created with its listing
-    // synchronously, while the outline load that follows is what would later dismiss an empty
-    // one. That the chord reaches this action at all is covered by the keymap test in `zed`.
-    editor.update_in(cx, |editor, window, cx| {
-        editor.open_breadcrumb_navigation_action(&OpenBreadcrumbNavigation, window, cx);
+    // Dispatched rather than called, so the action's registration on the element is on the path
+    // too. Deliberately not parked: the menu is created with its listing synchronously, and the
+    // outline load that follows is what would dismiss an empty one.
+    cx.update(|window, cx| {
+        window.dispatch_action(OpenBreadcrumbNavigation.boxed_clone(), cx);
+    });
+    editor.read_with(cx, |editor, cx| {
         let menu = editor
             .breadcrumb_navigation_menu()
             .expect("OpenBreadcrumbNavigation must open a menu entity");

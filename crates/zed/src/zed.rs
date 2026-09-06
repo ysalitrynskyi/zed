@@ -5588,41 +5588,85 @@ mod tests {
         );
     }
 
-    /// Both halves of owning a chord. It has to survive every context-less binding that comes
-    /// later in the same file - a context-less match sits at the deepest depth and a tie goes to
-    /// the later-added binding, which is how `dev::ToggleFpsOverlay` once swallowed the old chord
-    /// whenever an editor was focused. And it has to not do the same to anybody else: winning
-    /// from `Editor && mode == full` beats any shallower context, so a chord that is already
-    /// spoken for is retired wherever an editor is focused - which the first assertion is happy
-    /// to watch happen. `alt-shift-b` on Windows was exactly that, already `branches::OpenRecent`
-    /// at `Workspace`.
+    /// Both halves of owning a chord, against every keymap a user can be running. It has to
+    /// survive bindings that come later - a context-less match sits at the deepest depth, a base
+    /// keymap loads after the default one, and either way a tie goes to the later binding, which
+    /// is how `dev::ToggleFpsOverlay` once swallowed the old chord whenever an editor was
+    /// focused. And it must not do that to anybody else: winning from `Editor && mode == full`
+    /// beats any shallower context, so a chord already spoken for is retired wherever an editor
+    /// is focused - which the first assertion is happy to watch happen. `alt-shift-b` on Windows
+    /// was exactly that, already `branches::OpenRecent`.
+    ///
+    /// Punctuation is compared through the shifted character it arrives as, because that is what
+    /// Windows delivers: `alt-shift-.` and emacs' `alt->` are one gesture, and comparing the
+    /// spellings said they were two.
     #[gpui::test]
     fn test_breadcrumb_navigation_chord_is_not_shadowed(cx: &mut TestAppContext) {
         init_keymap_test(cx);
 
-        for (asset, keystroke) in [
-            ("keymaps/default-linux.json", "alt-shift-b"),
-            ("keymaps/default-windows.json", "alt-shift-."),
-            ("keymaps/default-macos.json", "cmd-alt-shift-p"),
+        // Every keymap the platform can load: its default, each base keymap a user can pick, and
+        // vim, which layers on top of whichever of those is active.
+        let linux_and_windows = [
+            "keymaps/vim.json",
+            "keymaps/linux/atom.json",
+            "keymaps/linux/cursor.json",
+            "keymaps/linux/emacs.json",
+            "keymaps/linux/jetbrains.json",
+            "keymaps/linux/sublime_text.json",
+            "keymaps/linux/vscode.json",
+        ];
+        let macos = [
+            "keymaps/vim.json",
+            "keymaps/macos/atom.json",
+            "keymaps/macos/cursor.json",
+            "keymaps/macos/emacs.json",
+            "keymaps/macos/jetbrains.json",
+            "keymaps/macos/sublime_text.json",
+            "keymaps/macos/textmate.json",
+            "keymaps/macos/vscode.json",
+        ];
+
+        for (default_asset, keystroke, base_assets) in [
+            (
+                "keymaps/default-linux.json",
+                "alt-shift-n",
+                linux_and_windows.as_slice(),
+            ),
+            (
+                "keymaps/default-windows.json",
+                "alt-shift-n",
+                linux_and_windows.as_slice(),
+            ),
+            (
+                "keymaps/default-macos.json",
+                "cmd-alt-shift-p",
+                macos.as_slice(),
+            ),
         ] {
             let (resolved, collisions) = cx.update(|cx| {
-                let mut bindings =
-                    settings::KeymapFile::load_asset_allow_partial_failure(asset, cx).unwrap();
-                for binding in &mut bindings {
-                    binding.set_meta(settings::KeybindSource::Default.meta());
-                }
+                let load = |asset: &str, cx: &mut gpui::App| {
+                    let mut bindings =
+                        settings::KeymapFile::load_asset_allow_partial_failure(asset, cx).unwrap();
+                    for binding in &mut bindings {
+                        binding.set_meta(settings::KeybindSource::Default.meta());
+                    }
+                    bindings
+                };
                 let chord = gpui::Keystroke::parse(keystroke).unwrap();
-                // Compared through the parsed keystroke, so modifier order does not hide one.
-                let collisions = bindings
-                    .iter()
-                    .filter(|binding| {
-                        binding.action().name() != "editor::OpenBreadcrumbNavigation"
-                            && binding.keystrokes().len() == 1
-                            && binding.keystrokes()[0].inner() == &chord
-                    })
-                    .map(|binding| binding.action().name().to_string())
-                    .collect::<Vec<_>>();
-                let resolved = gpui::Keymap::new(bindings)
+                let mut collisions = Vec::new();
+                for asset in std::iter::once(default_asset).chain(base_assets.iter().copied()) {
+                    for binding in load(asset, cx) {
+                        if binding.action().name() == "editor::OpenBreadcrumbNavigation"
+                            || binding.keystrokes().len() != 1
+                        {
+                            continue;
+                        }
+                        if same_gesture(binding.keystrokes()[0].inner(), &chord) {
+                            collisions.push(format!("{asset}: {}", binding.action().name()));
+                        }
+                    }
+                }
+                let resolved = gpui::Keymap::new(load(default_asset, cx))
                     .bindings_for_input(
                         &[chord],
                         &[
@@ -5640,13 +5684,128 @@ mod tests {
             assert_eq!(
                 resolved.first().map(String::as_str),
                 Some("editor::OpenBreadcrumbNavigation"),
-                "{asset}: {keystroke} must open breadcrumb navigation with an editor focused,                  got {resolved:?}"
+                "{default_asset}: {keystroke} must open breadcrumb navigation with an editor \
+                 focused, got {resolved:?}"
             );
             assert!(
                 collisions.is_empty(),
-                "{asset}: {keystroke} already belongs to {collisions:?}, which an                  editor-context binding retires wherever an editor is focused"
+                "{default_asset}: {keystroke} already belongs to {collisions:?}, which an \
+                 editor-context binding retires wherever an editor is focused"
             );
         }
+    }
+
+    /// The menu overrides only the four keys it has to take from the query editor beneath it;
+    /// the rest it inherits like any picker. Asserted against the shipped keymaps, because the
+    /// menu's own tests install their bindings by hand and would not notice either half moving.
+    #[gpui::test]
+    fn test_breadcrumb_menu_keys_resolve_from_the_shipped_keymaps(cx: &mut TestAppContext) {
+        init_keymap_test(cx);
+
+        for (default_asset, overrides_asset) in [
+            (
+                "keymaps/default-linux.json",
+                "keymaps/specific-overrides.json",
+            ),
+            (
+                "keymaps/default-windows.json",
+                "keymaps/specific-overrides.json",
+            ),
+            (
+                "keymaps/default-macos.json",
+                "keymaps/specific-overrides-macos.json",
+            ),
+        ] {
+            let resolve = |keystroke: &str, cx: &mut gpui::App| {
+                let mut bindings = Vec::new();
+                // Loaded in the order Zed loads them, so the override wins the ties it is for.
+                for asset in [default_asset, overrides_asset] {
+                    let mut loaded =
+                        settings::KeymapFile::load_asset_allow_partial_failure(asset, cx).unwrap();
+                    for binding in &mut loaded {
+                        binding.set_meta(settings::KeybindSource::Default.meta());
+                    }
+                    bindings.extend(loaded);
+                }
+                gpui::Keymap::new(bindings)
+                    .bindings_for_input(
+                        &[gpui::Keystroke::parse(keystroke).unwrap()],
+                        &[
+                            gpui::KeyContext::parse("Workspace").unwrap(),
+                            gpui::KeyContext::parse("BreadcrumbNavigationMenu").unwrap(),
+                            gpui::KeyContext::parse("Picker").unwrap(),
+                            gpui::KeyContext::parse("Editor mode=single_line").unwrap(),
+                        ],
+                    )
+                    .0
+                    .first()
+                    .map(|binding| binding.action().name().to_string())
+            };
+
+            for (keystroke, action) in [
+                // The four the override exists for.
+                ("left", "menu::SelectParent"),
+                ("right", "menu::SelectChild"),
+                ("home", "menu::SelectFirst"),
+                ("end", "menu::SelectLast"),
+                // ...and the ones it deliberately does not carry.
+                ("up", "menu::SelectPrevious"),
+                ("down", "menu::SelectNext"),
+                ("enter", "menu::Confirm"),
+                ("escape", "menu::Cancel"),
+            ] {
+                let resolved = cx.update(|cx| resolve(keystroke, cx));
+                assert_eq!(
+                    resolved.as_deref(),
+                    Some(action),
+                    "{default_asset} + {overrides_asset}: {keystroke} in the breadcrumb menu"
+                );
+            }
+        }
+    }
+
+    /// Whether two keystrokes are the same key press. Windows hands shifted punctuation and
+    /// digits over as the shifted character with `shift` dropped, so `alt-shift-.` and `alt->`
+    /// have to fold together before they can be compared.
+    fn same_gesture(left: &gpui::Keystroke, right: &gpui::Keystroke) -> bool {
+        fn fold(keystroke: &gpui::Keystroke) -> (gpui::Modifiers, String) {
+            const SHIFTED: &[(&str, &str)] = &[
+                ("~", "`"),
+                ("!", "1"),
+                ("@", "2"),
+                ("#", "3"),
+                ("$", "4"),
+                ("%", "5"),
+                ("^", "6"),
+                ("&", "7"),
+                ("*", "8"),
+                ("(", "9"),
+                (")", "0"),
+                ("_", "-"),
+                ("+", "="),
+                ("{", "["),
+                ("}", "]"),
+                ("|", "\\"),
+                (":", ";"),
+                ("\"", "'"),
+                ("<", ","),
+                (">", "."),
+                ("?", "/"),
+            ];
+            let mut modifiers = keystroke.modifiers;
+            let key = match SHIFTED
+                .iter()
+                .find(|(shifted, _)| *shifted == keystroke.key)
+            {
+                Some((_, unshifted)) => {
+                    modifiers.shift = true;
+                    (*unshifted).to_string()
+                }
+                None => keystroke.key.clone(),
+            };
+            (modifiers, key)
+        }
+        fold(left) == fold(right)
     }
 
     #[gpui::test]

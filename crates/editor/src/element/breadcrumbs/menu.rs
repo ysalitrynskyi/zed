@@ -65,7 +65,7 @@ pub(super) fn listing_path_impact(updated: &RelPath, listing: &RelPath) -> Listi
 }
 
 #[derive(Clone, Debug)]
-pub enum BreadcrumbListing {
+pub(crate) enum BreadcrumbListing {
     Directory {
         worktree_id: WorktreeId,
         path: Arc<RelPath>,
@@ -113,7 +113,7 @@ impl PartialEq for BreadcrumbListing {
 
 impl Eq for BreadcrumbListing {}
 
-pub struct BreadcrumbNavigationMenu {
+pub(crate) struct BreadcrumbNavigationMenu {
     editor: WeakEntity<Editor>,
     workspace: WeakEntity<Workspace>,
     listing: BreadcrumbListing,
@@ -125,13 +125,12 @@ pub struct BreadcrumbNavigationMenu {
     /// screen still describe the previous directory, and acting on one would pair its path with
     /// the new listing's worktree.
     entries_listing: Option<BreadcrumbListing>,
-    /// The load a drill started, while its target is still being expanded. The picker clears the
-    /// query as soon as Right is pressed, so without this the rows would repaint - unfiltered -
-    /// from the directory being left before the switch even installs the new listing.
+    /// The load a drill started, while its target is still being expanded; see the switch guard
+    /// in `publish_rows_now`.
     rows_frozen_for_load: Option<u64>,
     all_symbol_items: Vec<OutlineItem<Anchor>>,
-    /// Each symbol's parent outline index, cached next to `all_symbol_items` because it depends
-    /// only on the outline; recomputing it per publish walked every symbol on each keystroke.
+    /// Each symbol's parent outline index, held next to `all_symbol_items` because it depends
+    /// only on the outline, while publishing runs per keystroke.
     symbol_parents: Vec<Option<usize>>,
     listed_symbol_indices: Vec<usize>,
     cursor_symbol_ranges: Vec<Range<Anchor>>,
@@ -895,8 +894,8 @@ impl BreadcrumbNavigationMenu {
                 } = row
                 {
                     *indent = item.depth.saturating_sub(shallowest);
-                    // `listed_symbol_indices` is built in outline order, so a binary search
-                    // stands in for the linear scan this ran per row, per publish.
+                    // Built in outline order, and this runs per row per publish, so the
+                    // lookup is a binary search.
                     if self
                         .listed_symbol_indices
                         .binary_search(outline_index)
