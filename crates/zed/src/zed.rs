@@ -5702,24 +5702,54 @@ mod tests {
     fn test_breadcrumb_menu_keys_resolve_from_the_shipped_keymaps(cx: &mut TestAppContext) {
         init_keymap_test(cx);
 
-        for (default_asset, overrides_asset) in [
+        let linux_and_windows_bases = [
+            "keymaps/linux/atom.json",
+            "keymaps/linux/cursor.json",
+            "keymaps/linux/emacs.json",
+            "keymaps/linux/jetbrains.json",
+            "keymaps/linux/sublime_text.json",
+            "keymaps/linux/vscode.json",
+        ];
+        let macos_bases = [
+            "keymaps/macos/atom.json",
+            "keymaps/macos/cursor.json",
+            "keymaps/macos/emacs.json",
+            "keymaps/macos/jetbrains.json",
+            "keymaps/macos/sublime_text.json",
+            "keymaps/macos/textmate.json",
+            "keymaps/macos/vscode.json",
+        ];
+
+        for (default_asset, overrides_asset, base_assets) in [
             (
                 "keymaps/default-linux.json",
                 "keymaps/specific-overrides.json",
+                linux_and_windows_bases.as_slice(),
             ),
             (
                 "keymaps/default-windows.json",
                 "keymaps/specific-overrides.json",
+                linux_and_windows_bases.as_slice(),
             ),
             (
                 "keymaps/default-macos.json",
                 "keymaps/specific-overrides-macos.json",
+                macos_bases.as_slice(),
             ),
         ] {
-            let resolve = |keystroke: &str, cx: &mut gpui::App| {
+            let resolve = |keystroke: &str, base: Option<&str>, cx: &mut gpui::App| {
                 let mut bindings = Vec::new();
-                // Loaded in the order Zed loads them, so the override wins the ties it is for.
-                for asset in [default_asset, overrides_asset] {
+                // Loaded in the order Zed loads them - default, base keymap, vim, overrides -
+                // so each block wins exactly the ties it is meant to.
+                for asset in [
+                    Some(default_asset),
+                    base,
+                    Some("keymaps/vim.json"),
+                    Some(overrides_asset),
+                ]
+                .into_iter()
+                .flatten()
+                {
                     let mut loaded =
                         settings::KeymapFile::load_asset_allow_partial_failure(asset, cx).unwrap();
                     for binding in &mut loaded {
@@ -5742,24 +5772,27 @@ mod tests {
                     .map(|binding| binding.action().name().to_string())
             };
 
-            for (keystroke, action) in [
-                // The four the override exists for.
-                ("left", "menu::SelectParent"),
-                ("right", "menu::SelectChild"),
-                ("home", "menu::SelectFirst"),
-                ("end", "menu::SelectLast"),
-                // ...and the ones it deliberately does not carry.
-                ("up", "menu::SelectPrevious"),
-                ("down", "menu::SelectNext"),
-                ("enter", "menu::Confirm"),
-                ("escape", "menu::Cancel"),
-            ] {
-                let resolved = cx.update(|cx| resolve(keystroke, cx));
-                assert_eq!(
-                    resolved.as_deref(),
-                    Some(action),
-                    "{default_asset} + {overrides_asset}: {keystroke} in the breadcrumb menu"
-                );
+            for base in std::iter::once(None).chain(base_assets.iter().copied().map(Some)) {
+                for (keystroke, action) in [
+                    // The four the override exists for.
+                    ("left", "menu::SelectParent"),
+                    ("right", "menu::SelectChild"),
+                    ("home", "menu::SelectFirst"),
+                    ("end", "menu::SelectLast"),
+                    // ...and the ones it deliberately does not carry, which have to arrive
+                    // anyway - through `Picker > Editor` and the context-less `enter`.
+                    ("up", "menu::SelectPrevious"),
+                    ("down", "menu::SelectNext"),
+                    ("enter", "menu::Confirm"),
+                    ("escape", "menu::Cancel"),
+                ] {
+                    let resolved = cx.update(|cx| resolve(keystroke, base, cx));
+                    assert_eq!(
+                        resolved.as_deref(),
+                        Some(action),
+                        "{default_asset} + {base:?} + {overrides_asset}: {keystroke} in the menu"
+                    );
+                }
             }
         }
     }

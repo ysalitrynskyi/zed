@@ -737,13 +737,16 @@ impl BreadcrumbNavigationMenu {
     }
 
     pub(super) fn set_selected_row(&mut self, position: usize, cx: &mut Context<Self>) {
-        if self.selected_index != Some(position) {
-            self.move_selection(Some(position), cx);
-            // The picker already scrolls for selections it originates, and deliberately does
-            // not for hover. Scrolling again here would drag rows under a resting cursor and
-            // retrigger hover on the row that lands beneath it.
-            self.scroll_to_selection_pending = false;
+        if self.selected_index == Some(position) {
+            return;
         }
+        self.pending_initial_selection = false;
+        self.selected_index = Some(position);
+        // Nothing asks for a scroll here: the picker already scrolls for selections it
+        // originates, and deliberately does not for hover. Scrolling would drag rows under a
+        // resting cursor and retrigger hover on the row that lands beneath it.
+        self.publish_selection(cx);
+        cx.notify();
     }
 
     /// By index: the picker selects and confirms in one call, while the menu's copy of the
@@ -791,6 +794,34 @@ impl BreadcrumbNavigationMenu {
 
     /// Deferred and coalesced: delegate callbacks hold the picker's lease, so publishing
     /// inline would try to update it mid-update.
+    /// A selection change on its own. The rows are the objects the delegate already holds, and
+    /// rebuilding them clones every one - up to `MAX_BREADCRUMB_MENU_ROWS`, each with its
+    /// anchors and highlight ranges - which hovering does once per row it crosses. Deferred for
+    /// the same reason as `publish_rows`: callers reach here with the picker leased.
+    fn publish_selection(&mut self, cx: &mut Context<Self>) {
+        let menu = cx.weak_entity();
+        cx.defer(move |cx| {
+            menu.update(cx, |this, cx| {
+                let Some(picker) = this.picker.clone() else {
+                    return;
+                };
+                let selected_index = this
+                    .selected_index
+                    .unwrap_or(0)
+                    .min(this.rows.len().saturating_sub(1));
+                let scroll_to_selection = std::mem::take(&mut this.scroll_to_selection_pending);
+                picker.update(cx, |picker, cx| {
+                    picker.delegate.selected_index = selected_index;
+                    if scroll_to_selection {
+                        picker.scroll_to_selected_index();
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        });
+    }
+
     pub(super) fn publish_rows(&mut self, cx: &mut Context<Self>) {
         if self.rows_dirty {
             return;
@@ -1649,19 +1680,26 @@ impl BreadcrumbNavigationMenu {
         self.filter_cancel = Some(cancel_flag.clone());
         self.filter_settled.arm();
         self.filter_task = Some(cx.spawn(async move |this, cx| {
-            // Ranked in full and truncated below: `match_strings` truncates on its own
-            // comparator, which on equal scores keeps the highest candidate ids - the last
-            // files of the listing - while the cap promises the first ones.
-            let matches = fuzzy::match_strings(
-                candidates.as_slice(),
-                &query,
-                false,
-                true,
-                usize::MAX,
-                &cancel_flag,
-                executor,
-            )
-            .await;
+            // On the background executor, not just the match itself: `match_strings` gathers
+            // and sorts its results after the parallel part, and with the cap lifted below that
+            // is the whole matching set rather than a screenful.
+            let matches = cx
+                .background_spawn(async move {
+                    // Ranked in full and truncated below: `match_strings` truncates on its own
+                    // comparator, which on equal scores keeps the highest candidate ids - the
+                    // last files of the listing - while the cap promises the first ones.
+                    fuzzy::match_strings(
+                        candidates.as_slice(),
+                        &query,
+                        false,
+                        true,
+                        usize::MAX,
+                        &cancel_flag,
+                        executor,
+                    )
+                    .await
+                })
+                .await;
             this.update(cx, |this, cx| {
                 if this.filter_epoch != epoch {
                     return;
@@ -1840,14 +1878,6 @@ impl BreadcrumbNavigationMenu {
                 Some(0)
             }
         }
-    }
-
-    fn move_selection(&mut self, position: Option<usize>, cx: &mut Context<Self>) {
-        self.pending_initial_selection = false;
-        self.selected_index = position;
-        self.scroll_to_selection_pending = true;
-        self.publish_rows(cx);
-        cx.notify();
     }
 
     pub(super) fn confirm(

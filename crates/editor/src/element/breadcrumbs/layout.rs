@@ -1222,7 +1222,7 @@ mod tests {
         assert_eq!(
             folded_tail_start(px(100.), &sequence, &metrics),
             px(160.),
-            "each width already carries its trailing gap; adding the gap again folded \n         tails that fit"
+            "each width already carries its trailing gap; adding it again folds tails that fit"
         );
     }
 }
